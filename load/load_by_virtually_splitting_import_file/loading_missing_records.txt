@@ -1,0 +1,134 @@
+# Author: Dimitriy Alekseyev
+# Created: 2012-10-10
+
+# Max recorder_id in the database at failure = 433129641.
+# Max recorder_id in the database after next file was loaded = 434129641.
+
+# If there was a set of skipped rows, then we could use the method below to quickly grab those rows.
+
+# Adjust values depending on input file size and size of rows. We are going to quicly print recorder_id at various places in the file.
+# Randomly picked a starting point in the file, starting point could be at 0. Stepping size for skip_bytes was chosen as 10GiB, it could be smaller, so that there is no need for second or more iterations, but more rows will be printed.
+mysql@faclsna01slsd03:/mysql_02/tmp> time for ((skip_bytes=322122547200; skip_bytes<=622770257920; skip_bytes=skip_bytes+10737418240)); do echo "skip_bytes: $skip_bytes"; dd bs=1 skip=$skip_bytes < /ds_raw/test_export/gr_res_recorder.txt 2> /dev/null | head -2 | sed 1d | cut -f1; done
+skip_bytes: 322122547200
+231146182
+skip_bytes: 332859965440
+239134318
+skip_bytes: 343597383680
+247430379
+skip_bytes: 354334801920
+255472993
+skip_bytes: 365072220160
+263779663
+skip_bytes: 375809638400
+272000209
+skip_bytes: 386547056640
+279847863
+skip_bytes: 397284474880
+287947945
+skip_bytes: 408021893120
+295683548
+skip_bytes: 418759311360
+303267231
+skip_bytes: 429496729600
+310681268
+skip_bytes: 440234147840
+318353792
+skip_bytes: 450971566080
+326377235
+skip_bytes: 461708984320
+334199870
+skip_bytes: 472446402560
+342298466
+skip_bytes: 483183820800
+350132165
+skip_bytes: 493921239040
+358086861
+skip_bytes: 504658657280
+366076099
+skip_bytes: 515396075520
+373818311
+skip_bytes: 526133493760
+381588842
+skip_bytes: 536870912000
+389602776
+skip_bytes: 547608330240
+397656628
+skip_bytes: 558345748480
+405811104
+skip_bytes: 569083166720
+413707103
+skip_bytes: 579820584960
+421461971
+skip_bytes: 590558003200
+429176165
+skip_bytes: 601295421440
+437059449
+skip_bytes: 612032839680
+444971502
+skip_bytes: 622770257920
+452969437
+
+real    0m0.695s
+user    0m0.052s
+sys     0m0.283s
+
+
+# For start selecting:
+# skip_bytes: 590558003200
+# 429176165
+# For end selecting:
+# skip_bytes: 601295421440
+# 437059449
+# Difference: 601295421440 - 590558003200 = 10737418240
+
+time for ((skip_bytes=590558003200; skip_bytes<=601295421440; skip_bytes=skip_bytes+1073741824)); do echo "skip_bytes: $skip_bytes"; dd bs=1 skip=$skip_bytes < /ds_raw/test_export/gr_res_recorder.txt 2> /dev/null | head -2 | sed 1d | cut -f1; done
+skip_bytes: 590558003200
+429176165
+skip_bytes: 591631745024
+429997335
+skip_bytes: 592705486848
+430743949
+skip_bytes: 593779228672
+431487385
+skip_bytes: 594852970496
+432298236
+skip_bytes: 595926712320
+433076632
+skip_bytes: 597000454144
+433849469
+skip_bytes: 598074195968
+434629716
+skip_bytes: 599147937792
+435435780
+skip_bytes: 600221679616
+436269411
+skip_bytes: 601295421440
+437059449
+
+real    0m0.076s
+user    0m0.026s
+sys     0m0.091s
+
+# For start/end selecting:
+# skip_bytes: 595926712320
+# 433076632
+# skip_bytes: 598074195968
+# 434629716
+# Difference: 598074195968 - 595926712320 = 2147483648
+
+time ./dd_fast_seek.sh /ds_raw/test_export/gr_res_recorder.txt 595926712320 2147483648 2> /dev/null | sed 1d | sed -n '/^433129641[^0-9]/,/^434129641[^0-9]/p' | wc -l
+1000001
+
+real    0m6.891s
+user    0m4.563s
+sys     0m9.584s
+
+time ./dd_fast_seek.sh /ds_raw/test_export/gr_res_recorder.txt 595926712320 2147483648 2> /dev/null | sed 1d | sed -n '/^433129641[^0-9]/,/^434129641[^0-9]/p' > possible_missing_records.txt
+
+real    1m37.620s
+user    0m4.333s
+sys     0m12.274s
+
+
+# In above command, "sed -n '/^433129641[^0-9]/,/^434129641[^0-9]/p'" could be substituted with "grep -w -A 2000001 '^433129641'", depending on the use case.
+time ./dd_fast_seek.sh /ds_raw/test_export/gr_res_recorder.txt 595926712320 2147483648 2> /dev/null | sed 1d | grep -w -A 2000001 '^433129641' > possible_missing_records.txt

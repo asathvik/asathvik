@@ -1,0 +1,28 @@
+# Author: Dimitriy Alekseyev
+# Created: 2011-06-06, approx. based on file timestamp
+# Updated: 2012-05-29
+
+mysql@lv_data020:/mysql/11 $> cat readme.txt 
+Port forwarding is set up with the following command:
+ssh -f -N -L 3361:faclsna01smdb15:3360 10.183.100.115
+
+This was done because of the firewall issue.
+Replication is relying on port forwarding to work until the firewall is opened.
+
+Example:
+CHANGE MASTER TO
+MASTER_HOST='localhost',
+MASTER_PORT=3361,
+MASTER_USER='replslave',
+MASTER_PASSWORD='password',
+MASTER_LOG_FILE='binlog_faclsna01smdb15_11.000400',
+MASTER_LOG_POS=79394118;
+
+
+
+mysql@lv_data017:/mysql/10 $> cat readme.txt 
+Port forwarding is set up with the following command (run it as mysql user):
+ssh -f -N -L 3356:faclsna01smdb15:3355 10.183.100.115
+
+This was done because of the firewall issue.
+Replication is relying on port forwarding to work until the firewall is opened.
