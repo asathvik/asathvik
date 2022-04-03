@@ -1,3 +1,0 @@
-test_directory=/san01/disk_perf_test
-file_size=50 * 1024 * 1024 * 1024
-block_size=16 * 1024
