@@ -7,9 +7,6 @@
 # Purpose:
 #       Shell script for invoking email for retrieving MySQL Database Size script
 #
-# Usage:
-#      ./mysql_get_db_size_run.sh
-#
 # Date Created:
 #       28/01/2015
 #
