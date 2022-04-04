@@ -7,9 +7,6 @@
 # Purpose:
 #       Shell script for getting MySQL Database Size from DB level
 #
-# Usage:
-#      ./mysql_get_db_size.sh
-#
 # Date Created:
 #       28/01/2015
 #
