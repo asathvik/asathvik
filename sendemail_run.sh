@@ -1,9 +1,5 @@
 #!/bin/sh
 ################################################################################
-#
-# Author:
-#       Anil Alpati
-#
 # Purpose:
 #       Shell script for invoking email for retrieving MySQL Database Size script
 #
