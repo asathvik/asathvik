@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+#
+# Purpose of this script is to backup the database instance on the on-prem using mydumper and
+# restore it on the destination server using myloader.
+#
+# This script is meant to be run on the on-prem server.
+#
+##
+# The format of /root/.rds_details.cnf
+# [root@dc101offdbmdb-01 pocs]# cat /root/.rds_details.cnf
+# rds_user="<replace this with RDS DB username>"
+# rds_pass='<replace this with RDS DB password>'
+# rds_host="<replace this with RDS DB Hostname>"
+# rds_port=<replace this with RDS DB port>
+#
+
+export PATH=$PATH:/usr/sbin
+myhostname=$(hostname -s)
+myname=$(basename $0)
+role=$(grep -i SERVERDB_ROLE_NAMES /etc/sysconfig/bookings.puppet | awk -F'=' '{print $2}' | awk -F'"' '{$0=$2}1' | sed 's/db$//')
+defaultsfile="/root/.my.cnf"
+source /root/.rds_details.cnf
+outputdir="/mysql/$role/backups"
+threads_dump=16
+threads_restore=16
+logfilepath="/mysql/$role/"
+
+EMAIL_Recipients="Anil Kumar (AK) Alpati <anil.alpati@booking.com>"
+EMAIL_Recipients_Error=${EMAIL_Recipients}
+sendmail=/usr/sbin/sendmail
+sender="$myname script <dba.cron@booking.com>"
+footer="Please report any problems to dba.ops@booking.com."
+
+mysql_con="/bin/mysql"
+msg_info() {
+        echo "$(date +'%Y-%m-%d %H:%M:%S') $myhostname $myname[$$]: $*"
+}
+
+msg_verbose() {
+        [ -z "$verbose" ] && return
+        msg_info "$*"
+}
+
+verbose=
+while getopts v flag; do
+        case $flag in
+        v) verbose=1 ;;
+        *) msg_info "Incorrect option $flag" ;;
+        esac
+done
+
+if [ $(id -unr) != "root" ]; then
+        msg_info "Error: Run this script as root"
+        exit 0
+fi
+
+if [[ ! -f /root/.rds_details.cnf ]]; then
+        msg_info "The /root/.rds_details.cnf is either empty or missing. Kindly update RDS login details for proceeding to next step... exit now".
+        exit 0
+fi
+
+if [[ ! -f /root/.my.cnf ]]; then
+        msg_info "The file /root/.root.cnf is either empty or missing. Kindly update local root login details for proceeding to next step... exit now".
+        exit 0
+fi
+
+#functions
+clean_up() {
+        # Function to remove temporary files and other housekeeping
+        # No arguments
+        rm -Rf ${tmp_file}
+}
+
+graceful_exit() {
+        # Function called for a graceful exit
+        # No arguments
+        clean_up
+        exit
+}
+
+error_exit() {
+        # Function for exit due to fatal program error
+        # Accepts 1 argument
+        #       string containing descriptive error message
+        msg_info "${progname}: ${1:-"Unknown Error"}"
+        clean_up
+        exit 1
+}
+
+term_exit() {
+        # Function to perform exit if termination signal is trapped
+        # No arguments
+        msg_info "${progname}: Terminated"
+        clean_up
+        exit
+}
+
+int_exit() {
+        # Function to perform exit if interrupt signal is trapped
+        # No arguments
+        msg_info "${progname}: Aborted by user"
+        clean_up
+        exit
+}
+
+# Trap TERM, HUP, and INT signals and properly exit.
+trap term_exit TERM HUP
+trap int_exit INT
+
+#Install mydumper on source server
+mydumper_install() {
+        yum list | grep mydumper
+        if [[ $? != 0 ]]; then
+                msg_info "Installing mydumper."
+                release=$(curl -Ls -o /dev/null -w %{url_effective} https://github.com/mydumper/mydumper/releases/latest | cut -d'/' -f8)
+                #release="v0.15.1-1"
+                msg_info "mydumper version $release is going to install"
+                sleep 2s
+                yum -y install https://github.com/mydumper/mydumper/releases/download/${release}/mydumper-${release:1}.el8.x86_64.rpm
+        else
+                msg_info "mydumper is already installed"
+                msg_info $(mydumper -V)
+        fi
+}
+
+backup_mysql() {
+
+        ##Backing up the data in Source
+        msg_info "Backing up the data in Source"
+        if [ -d "$outputdir" -a ! -h "$outputdir" ]; then
+                msg_info "Looks like Backup already exists $outputdir(size:$(du -sh $outputdir | awk -F' ' '{print $1}')). Kindly verify if it is latest or Delete the folder (rm -Rf $outputdir) and re-try once again. exiting now.."
+                exit 0
+        fi
+
+        time mydumper --defaults-file $defaultsfile --outputdir=$outputdir --threads=$threads_dump --chunk-filesize=1024 --regex '^(?!(mysql\.|test\.|performance_schema\.|information_schema\.|common_schema\.|sys\.|mysql_innodb_cluster_metadata\.))' -G -E -R -c -e --less-locking --skip-definer --trx-consistency-only --no-backup-locks -v 1 --logfile $logfilepath/mydumper_$myname.log
+        if [[ $? == 0 ]]; then
+                msg_info "MySQL Backup for $role is completed ($outputdir)"
+                cat <<-EOF | $sendmail -oi -t
+From: $sender
+To: $EMAIL_Recipients
+Subject: $myhostname: INFO: MySQL Backup for $role is completed ($outputdir)
+Hello,
+
+This is just to let you know that MySQL Backup for $role has been completed successfully and is now available at $outputdir. 
+
+Details:
+---------
+Source Host   : $myhostname
+Source Port   : 3306
+ServerDB Role        : $role
+Source Backup Directory : $outputdir
+Backup Size : $(du -sh $outputdir | awk -F' ' '{print $1}')
+
+$footer
+EOF
+        else
+                msg_info "MySQL Backup for $role is Failed"
+                cat <<-EOF | $sendmail -oi -t
+From: $sender
+To: $EMAIL_Recipients
+Subject: $myhostname: ERROR: MySQL Backup for $role is Failed
+Hello,
+
+This is just to inform you that MySQL Backup for $role is Backup is Failed. Kindly verify and Delete the created backup folder (rm -Rf $outputdir) and re-try once again. exiting now..
+
+Details:
+---------
+Source Host   : $myhostname
+Source Port   : 3306
+ServerDB Role : $role
+Source Backup Directory : $outputdir
+
+$footer
+
+EOF
+                exit 0
+        fi
+}
+
+##Restoring data into RDS instance from source.
+
+restore_mysql() {
+
+        msg_info "pre-check:setting permissions"
+        $mysql_con -h $rds_host --port $rds_port --user=$rds_user --password=$rds_pass <<EOF
+ 	GRANT REPLICATION_APPLIER,REPLICATION_SLAVE_ADMIN, SYSTEM_VARIABLES_ADMIN,SET_USER_ID ON *.* TO  $rds_user@'%';
+        FLUSH PRIVILEGES;
+	SET GLOBAL sql_require_primary_key = OFF;
+EOF
+        msg_info "Restoring data into RDS instance from source."
+        time myloader --threads=$threads_restore --queries-per-transaction=100000 -h $rds_host --port $rds_port --user=$rds_user --password=$rds_pass --directory /mysql/$role/backups -o -v 2 --logfile $logfilepath/myloader_$myname.log
+        if [[ $? == 0 ]]; then
+                msg_info "MySQL Restore for $role in RDS($rds_host:$rds_port) is completed"
+                cat <<-EOF | $sendmail -oi -t
+From: $sender
+To: $EMAIL_Recipients
+Subject: $myhostname: INFO: MySQL Restore for $role in RDS is completed.
+
+Hello,
+
+This is just to inform you that MySQL Restore for $role is completed successfully.
+
+Details:
+--------
+Source Host   : $myhostname
+Source Port   : 3306
+Role        : $role
+Source Backup Directory : $outputdir
+Backup Size : $(du -sh $outputdir | awk -F' ' '{print $1}')
+Destination Host : $rds_host
+Destination Port : $rds_port
+
+$footer
+EOF
+        else
+                msg_info "MySQL Restore for $role in RDS($rds_host:$rds_port) is Failed"
+                cat <<-EOF | $sendmail -oi -t
+From: $sender
+To: $EMAIL_Recipients
+Subject: $myhostname: ERROR: MySQL Restore for $role in RDS($rds_host:$rds_port) is Failed
+
+Hello,
+
+This is just to inform you that MySQL Restore for $role is Failed. Kindly verify the details and re-try once again.
+
+Details:
+---------
+Source Host   : $myhostname
+Source Port   : 3306
+ServerDB Role : $role
+Source Backup Directory : $outputdir
+Destination Host : $rds_host
+Destination Port : $rds_port
+
+$footer
+
+EOF
+        fi
+        msg_info "pre-check:setting permissions DONE."
+        $mysql_con -h $rds_host --port $rds_port --user=$rds_user --password=$rds_pass <<EOF
+	SET GLOBAL sql_require_primary_key = ON;
+EOF
+}
+
+mydumper_install
+backup_mysql
+restore_mysql
+graceful_exit
